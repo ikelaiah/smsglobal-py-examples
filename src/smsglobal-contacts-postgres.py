@@ -28,7 +28,16 @@ import secrets
 from datetime import datetime
 from urllib.parse import urlsplit
 
-import psycopg
+try:
+    import psycopg
+except ImportError as e:
+    print(
+        f"psycopg import failed: {e}\n"
+        "Install with:  pip install 'psycopg[binary]'",
+        file=sys.stderr,
+    )
+    raise
+
 import requests
 from dotenv import load_dotenv
 

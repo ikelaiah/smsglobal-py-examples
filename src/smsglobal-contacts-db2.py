@@ -25,30 +25,58 @@ import pathlib
 from datetime import datetime
 
 # ─────────────────────────────────────────────────────────────────────────────
-# IBM DB2 driver DLL setup
+# IBM DB2 driver DLL setup — must run BEFORE `import ibm_db`.
+#
+# In a venv on Windows, site.getsitepackages() returns the base interpreter's
+# site-packages, not the venv's, so we resolve clidriver via the import system
+# (find_spec) and fall back to sys.prefix for unusual layouts.
 # ─────────────────────────────────────────────────────────────────────────────
-import site
+import importlib.util  # noqa: E402
+
+# Keep handles alive so the DLL directories aren't removed by GC.
+_DLL_HANDLES = []
 _candidates = []
-for _sp in site.getsitepackages():
-    _sp = pathlib.Path(_sp)
-    _candidates.append(_sp / "clidriver" / "bin")
-    _candidates.append(_sp / "ibm_db" / "clidriver" / "bin")
+
+# 1. clidriver as a sibling top-level package (typical ibm_db install).
+_spec = importlib.util.find_spec("clidriver")
+if _spec and _spec.submodule_search_locations:
+    for _loc in _spec.submodule_search_locations:
+        _candidates.append(pathlib.Path(_loc) / "bin")
+
+# 2. clidriver bundled inside the ibm_db package directory.
+_spec = importlib.util.find_spec("ibm_db")
+if _spec and _spec.submodule_search_locations:
+    for _loc in _spec.submodule_search_locations:
+        _candidates.append(pathlib.Path(_loc) / "clidriver" / "bin")
+elif _spec and _spec.origin:
+    _candidates.append(pathlib.Path(_spec.origin).parent / "clidriver" / "bin")
+
+# 3. Fallback: probe the active interpreter's site-packages directly.
+_prefix_sp = pathlib.Path(sys.prefix) / "Lib" / "site-packages"
+_candidates.append(_prefix_sp / "clidriver" / "bin")
+_candidates.append(_prefix_sp / "ibm_db" / "clidriver" / "bin")
+
+# 4. Explicit override via env var (e.g. system-wide CLI driver).
+_ibm_home = os.environ.get("IBM_DB_HOME")
+if _ibm_home:
+    _candidates.append(pathlib.Path(_ibm_home) / "bin")
 
 _added = False
 for _p in _candidates:
     if _p.exists():
-        os.add_dll_directory(str(_p))
+        _DLL_HANDLES.append(os.add_dll_directory(str(_p)))
+        # Help any child DLLs that resolve through PATH too.
+        os.environ["PATH"] = str(_p) + os.pathsep + os.environ.get("PATH", "")
+        print(f"Added IBM DB2 DLL directory: {_p}", file=sys.stderr)
         _added = True
         break
 
 if not _added:
-    _ibm_home = os.environ.get("IBM_DB_HOME")
-    if _ibm_home:
-        _binp = pathlib.Path(_ibm_home) / "bin"
-        if _binp.exists():
-            os.add_dll_directory(str(_binp))
-    else:
-        print("WARNING: Could not locate IBM DB2 CLI driver DLLs.", file=sys.stderr)
+    print(
+        "WARNING: Could not locate IBM DB2 CLI driver DLLs. Tried: "
+        + ", ".join(str(p) for p in _candidates),
+        file=sys.stderr,
+    )
 
 import time  # noqa: E402
 import hmac  # noqa: E402
